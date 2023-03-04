@@ -1,0 +1,344 @@
+---
+title: "<BR><b><center>Maestría en exploración de datos y descubrimiento del conocimiento</center></b><BR><center>Trabajo práctico N°1: Regresión lineal</center>"
+author: "<BR><BR><BR><center>Autor: Federico Ricardo Checozzi</center>"
+date: "<BR><center>Fecha: 16 de octubre de 2022</center><BR><BR><BR>"
+output: 
+  html_document:
+    theme: simplex
+    toc: true 
+    toc_float: true
+header_includes: 
+  -\usepackage{amsmath}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Carga de librerías
+
+```{r warning = FALSE, message = FALSE}
+library(knitr)
+library(tidymodels)
+library(rsample)
+library(ggcorrplot)
+library(ggmosaic)
+library(gridExtra) 
+library(ggfortify)
+library(GGally)
+library(MASS)
+library(tidyverse)
+```
+
+
+# Carga de datos
+
+Para este trabajo fueron provistos un dataset de entrenamiento y uno de prueba. *record* es utilizado como nombre de fila y no es considerado una variable en análisis posteriores.
+
+```{r}
+dtrain  <- read.csv("./Datasets/encuesta_salud_train.csv", encoding="UTF-8",stringsAsFactors = TRUE, row.names ="record") 
+dtest   <- read.csv("./Datasets/encuesta_salud_test.csv" , encoding="UTF-8",stringsAsFactors = TRUE, row.names ="record") 
+```
+Se convirtieron los campos textuales a factor para simplificar el código posterior (en algunos casos va a tener que hacerse esta conversión a través de as.factor si no se realiza ahora). También tuvo que elegirse la codificación de texto correcta para evitar problemas con archivos con carácteres específicos del español.
+
+# Exploración de datos
+
+El dataset de entrenamiento tiene 5268 registros y 15 variables. Al examinarlo, se observa que *edad*, *altura*, *peso*, *dias_consumo_comida_rapida*, *consumo_diario_alcohol* y *dias_actividad_fisica_semanal* son variables numéricas, mientras que *genero*, *nivel_educativo*, *frecuencia_hambre_mensual*, *edad_consumo_alcohol*, *consumo_semanal_frutas*, *consumo_semanal_verdura*, *consumo_semanal_gaseosas*, *consumo_semanal_snacks* y *consumo_semanal_comida_grasa* son variables categóricas. 
+
+```{r}
+kable(summary(dtrain))
+```
+
+
+*edad* y *dias_consumo_comida_rapida* son variables enteras. Los participantes de la encuesta tienen entre 12 y 18 años, hay menos hombres que mujeres encuestados. La altura está dada en cm y el peso en Kg.
+
+Puede observarse también que no hay variables con valores faltantes en el dataset:
+```{r}
+names(which(colSums(is.na(dtrain))>0))
+```
+
+Para poder observar los valores de correlación entre variables numéricas y desagregar por género se utilizó la función *ggpairs*. Se puede ver que la altura está correlacionada con el peso, y en menor medida que hay correlaciones entre la edad, el peso y la altura por un lado, y la altura y la actividad física semanal por el otro. El peso no tiene una correlación fuerte con los consumos de alcohol y comida rápida, ni con la actividad física. Como regla general, la altura y el peso de las mujeres es menor que la de los hombres para todas estas asociaciones (puede verse claramente en los gráficos de densidad en la diagonal, así como en algunos de los scatterplots).
+
+```{r warning = FALSE, message = FALSE, fig.width = 12, fig.height = 12, dpi = 200}
+dtrain %>% dplyr::select(edad,altura,peso,dias_consumo_comida_rapida,consumo_diario_alcohol,dias_actividad_fisica_semanal,genero) %>%
+ ggpairs(aes(color = genero, alpha = 0.5))
+```
+
+Para poder ver la distribución en términos de frecuencia relativa de *frecuencia_hambre_mensual* vs. *consumo_semanal_verdura*/*consumo_semanal_comida_grasa*, se utilizö la función *geom_mosaic* de la librería *ggmosaic*.
+
+```{r fig.width = 12, fig.height = 12, dpi = 200, warning = FALSE}
+dtrain %>% ggplot() +
+   geom_mosaic(aes(x=product(frecuencia_hambre_mensual,consumo_semanal_verdura), fill = frecuencia_hambre_mensual),show.legend = FALSE) + 
+     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Puede verse que es más frecuente que una persona que pase hambre no haya consumido verduras recientemente, aunque hay un pequeño subgrupo que consume muchas verduras (quizás sea el único elemento de la dieta en alguna región rural).
+
+```{r fig.width = 12, fig.height = 12, dpi = 200, warning = FALSE}
+dtrain %>% ggplot() +
+   geom_mosaic(aes(x=product(frecuencia_hambre_mensual,consumo_semanal_comida_grasa), fill = frecuencia_hambre_mensual),show.legend = FALSE) + 
+     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+También puede verse que el consumo de comidas grasas es más frecuente en el caso de personas que pasan hambre. Eso puede ser debido a que ese tipo de comida es en general barata aunque no muy nutritiva.
+
+# Modelo inicial
+
+El modelo pedido es:
+
+```{r}
+first_model <- lm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol, data = dtrain)
+tidy_first_model <- tidy(first_model, conf.int = TRUE)
+
+kable(tidy_first_model)
+```
+
+El valor de $\hat{\beta_0}$ es $-68,92Kg$, lo que corresponde al peso esperado de una estudiante femenina cuya altura sea de $0cm$, la edad sea $0\text{ años}$, realice $0\text{ días}$ de actividad física y que tome $0\text{ tragos de alcohol}$ por día. Este coeficiente carece de sentido debido a que algunos de esos valores no son posibles.
+
+El valor de $\hat{\beta_{altura}}$ es de $0,65\frac{Kg}{cm}$, por lo que por cada $cm$ extra de altura se espera un incremento de peso de $0,65Kg$, dado que todas las otras variables permanezcan constantes.
+
+El valor de $\hat{\beta_{edad}}$ es de $1,41\frac{Kg}{año}$, por lo que por cada $año$ extra de edad se espera un incremento de peso de $1,41Kg$, dado que todas las otras variables permanezcan constantes.
+
+El valor de $\hat{\beta_{dias\_actividad\_fisica\_semanal}}$ es de $-0,087\frac{Kg}{día}$, por lo que por cada $día$ extra de actividad física se espera un decrecimiento de peso de $0,087Kg$, dado que todas las otras variables permanezcan constantes.
+
+El valor de $\hat{\beta_{consumo\_diario\_alcohol}}$ es de $0,0072\frac{Kg}{\frac{trago}{día}}$, por lo que por cada $\frac{trago}{día}$ extra de alcohol se espera un incremento de peso de $0,0072Kg$, dado que todas las otras variables permanezcan constantes.
+
+El valor de $\hat{\beta_\text{generoMasculino}}$ es $1,26Kg$, lo que es la diferencia del nivel medio de peso respecto a las estudiantes femininas (categoría basal). El nivel medio de peso para estudiantes masculinos, $\hat{\beta_0} + \hat{\beta_\text{generoMasculino}}$ es ligeramente más grande por lo cual se espera un poco más de peso para estudiantes masculinos, dado que todas las otras variables permanezcan constantes. 
+
+De todos los coeficientes, solamente $\hat{\beta_{dias\_actividad\_fisica\_semanal}}$ y $\hat{\beta_{consumo\_diario\_alcohol}}$ no son significativos ($p>0,05$).
+
+```{r}
+kable(glance(first_model))
+```
+
+El modelo es globalmente significativo y explica un $35,44\%$ de la variabilidad total.
+
+# Modelo categóricas
+
+Para correr el modelo categórico de acuerdo a lo pedido, primero se usa la función relevel, la cual acepta como argumento un nivel de referencia para que sea basal. Para evitar problemas más adelante se realiza la misma conversión sobre el dataset de prueba.
+```{r}
+dtrain <- dtrain %>%
+  mutate(consumo_semanal_snacks = relevel(consumo_semanal_snacks,ref = "No comí comida salada o snacks en los últimos 7 días"))
+dtest <- dtest %>%
+  mutate(consumo_semanal_snacks = relevel(consumo_semanal_snacks,ref = "No comí comida salada o snacks en los últimos 7 días"))
+```
+
+El modelo pedido es:
+
+```{r}
+cat_model <- lm(peso ~ altura + edad + genero + consumo_semanal_snacks + genero*edad, data = dtrain)
+tidy_cat_model <- tidy(cat_model, conf.int = TRUE)
+
+kable(tidy_cat_model)
+```
+
+El valor de $\hat{\beta_0}$ es $-64,20Kg$, lo que corresponde al peso esperado de una estudiante femenina cuya altura sea de $0cm$, la edad sea $0\text{ años}$ y que no consuma snacks en los últimos 7 días. Este coeficiente carece de sentido debido a que algunos de esos valores no son posibles.
+
+Los coeficientes para los diferentes niveles de $consumo\_semanal\_snacks$ controlan cuanto aumenta el precio medio para cada nivel, dado que todas las otras variables permanezcan constnates. Por ejemplo, el nivel medio de peso para estudiantes que consumen snacks una vez por día, varía en $\hat{\beta_\text{1 vez al día}} \approxeq -0,61$, lo cual es ligeramente más pequeño por lo cual se espera un poco menos de peso ($\hat{\beta_0} + \hat{\beta_\text{1 vez al día}}$) para ese nivel de consumo. Esto va un poco contra el sentido común en principio (una explicación posible sería que el nivel de ingresos requerido para comprar snacks explique el peso medio más bajo y que el nivel de ingresos esté relacionado con pesos más saludables).
+
+El valor de $\hat{\beta_{edad:generoMasculino}}$ es de $0,39\frac{Kg}{año}$, este coeficiente modifica aditivamente a $\hat{\beta_{edad}}$ si el estudiante es masculino, por lo que para estudiantes masculinos, por cada $año$ extra de edad se espera un incremento de peso de $\hat{\beta_{edad}} + \hat{\beta_{edad:generoMasculino}}$, dado que todas las otras variables permanezcan constantes.
+
+De todos los coeficientes, aquellos para 1, 2 y 3 veces al día no son significativos ($p>0,05$). Si bien el coeficiente para la interacción entre edad y género es significativo, es a cambio de hacer que el coeficiente para género masculino no lo sea.
+
+```{r}
+kable(glance(cat_model))
+```
+El porcentaje de variabilidad explicada por el modelo es de $35,85\%$
+
+```{r}
+kable(tidy(anova(cat_model)))
+```
+
+La variable $consumo\_semanal\_snacks$ es significativa en conjunto ($p<0,05$).
+
+Se creó una nueva variable $consumo\_semanal\_snacks2$ con categorías redefinidas a $consumo\_semanal\_snacks$ a "Infrecuente", "Moderado" y "Frecuente" de manera de agrupar las categorías no significativas, con "Infrecuente" como categoría basal:
+
+```{r}
+dtrain <- dtrain %>%
+  mutate(consumo_semanal_snacks2 = case_when(
+    consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días" ~ "Infrecuente",
+    consumo_semanal_snacks == "1 a 3 veces durante los últimos 7 días" ~ "Moderado",
+    !(consumo_semanal_snacks %in% c("No comí comida salada o snacks en los últimos 7 días","1 a 3 veces durante los últimos 7 días")) ~ "Frecuente"
+  )) %>%
+  mutate(consumo_semanal_snacks2 = relevel(as.factor(consumo_semanal_snacks2),ref="Infrecuente"))
+dtest <- dtest %>%
+  mutate(consumo_semanal_snacks2 = case_when(
+    consumo_semanal_snacks == "No comí comida salada o snacks en los últimos 7 días" ~ "Infrecuente",
+    consumo_semanal_snacks == "1 a 3 veces durante los últimos 7 días" ~ "Moderado",
+    !(consumo_semanal_snacks %in% c("No comí comida salada o snacks en los últimos 7 días","1 a 3 veces durante los últimos 7 días")) ~ "Frecuente"
+  )) %>%
+  mutate(consumo_semanal_snacks2 = relevel(as.factor(consumo_semanal_snacks2),ref="Infrecuente"))
+```
+
+Y con la nueva variable se entrenó otro modelo, en el cual resultan todas las categorías significativas:
+
+```{r}
+cat_model2 <- lm(peso ~ altura + edad + genero + consumo_semanal_snacks2 + genero*edad, data = dtrain)
+tidy_cat_model2 <- tidy(cat_model2, conf.int = TRUE)
+
+kable(tidy_cat_model2)
+```
+
+El porcentaje de variabilidad explicada por el modelo es de $35,73\%$, lo cual es ligeramente menor que en el modelo original:
+
+```{r}
+kable(glance(cat_model2))
+```
+
+# Modelos propios y evaluación
+
+Se proponen dos modelos:
+
+* Modelo 1: Se reemplaza altura por su inverso al cuadrado. Este modelo está inspirado en el Índice de Masa Corporal $IMC = \frac{Peso[Kg]}{Altura[m]^2}$, el cual se usa para estudiar la relación entre la altura y el peso.
+
+```{r}
+dtrain <- dtrain %>%
+  mutate(inverso_cuadrado_altura = 1/altura**2)
+dtest <- dtest %>%
+  mutate(inverso_cuadrado_altura = 1/altura**2)
+
+
+extra_model <- lm(peso ~ inverso_cuadrado_altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol, data = dtrain)
+```
+
+Una manera de pensar el efecto del término con el inverso al cuadrado es que cada vez que se duplica la altura, el efecto sobre el peso cae cuatro veces
+
+$\Delta peso =  \beta\frac{1}{(2 altura)^2} = \frac{1}{4} \beta\frac{1}{(altura)^2}$
+
+Y que si se divide a la mitad la altura, el peso incrementa cuatro veces:
+
+$\Delta peso =  \beta\frac{1}{(\frac{1}{2} altura)^2} = 4 \beta\frac{1}{(altura)^2}$
+
+* Modelo 2: Se intenta modelar el ingreso y el egreso de energía al organismo, considerando días de ejercicio y comida alta en calorías:
+
+```{r}
+extra_model2 <- lm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + dias_consumo_comida_rapida + consumo_semanal_comida_grasa, data = dtrain)
+```
+
+Los $R^2_{ajustado}$ para todos los modelos generados en este trabajo fueron:
+
+```{r}
+models <- list(first_model = first_model,cat_model = cat_model,cat_model2 = cat_model2, extra_model = extra_model, extra_model2 = extra_model2)
+
+df_eval = map_df(models, glance, .id = "model") %>%
+  # ordenamos por R2 ajustado
+  arrange(desc(adj.r.squared)) %>%
+  dplyr::select(model,r.squared,adj.r.squared)
+
+kable(df_eval)
+```
+
+En esta comparación gana el primero de los modelos categóricos (y el modelo con una nueva variable queda como el peor).
+
+Las métricas RMSE y MAE medidas sobre el dataset de entrenamiento fueron:
+
+```{r}
+pred_list_train = map(.x = models, .f = augment)
+train_metrics <- map_dfr(.x = pred_list_train, .f = metrics, truth = peso, estimate = .fitted, .id="model") %>% arrange(.estimate) %>% dplyr::filter(.metric != "rsq") %>% dplyr::select(-.estimator)
+
+kable(train_metrics)
+```
+
+Otra vez resulta mejor el primer modelo categórico y peor el primero de los modelos nuevos. El segundo de los modelos nuevos no queda demasiado lejos del mejor modelo.
+
+Similarmente, las métricas evaluadas en el dataset de prueba fueron:
+
+```{r}
+pred_list_test = map(.x = models, .f = augment, new_data = dtest)
+test_metrics <- map_dfr(.x = pred_list_test, .f = metrics, truth = peso, estimate = .fitted, .id="model") %>% arrange(.estimate) %>% dplyr::filter(.metric != "rsq") %>% dplyr::select(-.estimator)
+
+kable(test_metrics)
+```
+La cual da resultados similares al dataset de entrenamiento.
+
+En conclusión, el mejor modelo es el primero de los modelos categóricos.
+
+# Diagnóstico del modelo inicial
+
+La función *autoplot* de la librería *ggfortify* es capaz de generar los gráficos de diagnóstico de un modelo lineal automáticamente para *ggplot*.
+
+```{r}
+autoplot(first_model, nrow = 2)
+```
+
+```{r}
+first_model %>% augment() %>% filter(.hat>0.5)
+```
+
+
+* *Residuos vs. valores predichos*: la tendencia de los residuos se curva un poco y la varianza parece incrementarse cerca de los valores promedios ajustados, por lo que no se satisface el supuesto de homocedasticidad.
+
+* *Normal QQ plot*: El extremo superior derecho no se ajusta a la distribución teórica.
+
+* *Residual vs leverage*: Existen puntos con residuos altos pero tienen poco leverage. No hay puntos con leverage alto ($h_{ii} > 0,5$) Así que no se observan puntos capaces de influir negativamente en la regresión. 
+
+* *Diagnóstico*: El modelo creado no cumple con los supuestos del modelo lineal. Hay algo de heterocedasticidad y desviaciones de la normalidad.
+
+# Modelo Robusto
+
+Adicionalmente a los otros dos datasets, fue incluido uno con valores atípicos adicionales:
+```{r}
+dtrain2 <- read.csv("./Datasets/encuesta_salud_modelo6.csv", encoding="UTF-8",stringsAsFactors = TRUE, row.names ="record") 
+
+```
+
+Puede observarse que hay un cúmulo de observaciones con más peso que el cúmulo principal:
+```{r}
+dtrain2 %>% ggplot(aes(x = altura, y = peso, color = genero)) +
+  geom_point()
+```
+
+Al entrenar el modelo original con los datos nuevos puede verse un efecto importante sobre los coeficientes estimados: 
+```{r}
+first_model2 <- lm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol, data = dtrain2)
+tidy_first_model2 <- tidy(first_model2, conf.int = TRUE)
+tidy_first_model2 %>% kable()
+```
+
+Por ejemplo, el valor de $\hat{\beta_0}$ era $-68,92Kg$y ahora es $-26,29Kg$ y el valor de $\hat{\beta_{altura}}$ era de $0,65\frac{Kg}{cm}$ y ahora es $0,35\frac{Kg}{cm}$.
+
+Mientras que $R^2_{ajustado}$ es menor que el original, y RMSE y MAE son mayores que los originales:
+
+```{r}
+first_model2 %>% glance() %>% kable()
+
+first_model2 %>% augment() %>% metrics(truth = peso, estimate = .fitted) %>% kable()
+```
+
+Esto es debido a que las nuevas observaciones añadidas hacen que los datos sean menos lineales y cueste más hacer un ajuste adecuado.
+
+Se utilizó la función *rlm* de la librería *MASS* para entrenar un modelo lineal robusto con las mismas especificaciones:
+
+```{r}
+robust_model <- rlm(peso ~ altura + edad + genero + dias_actividad_fisica_semanal + consumo_diario_alcohol, data = dtrain2)
+
+```
+
+Esta función hace una regresión robusta iterativa y pesada por cuadrados mínimos (IRLS, iterative reweighted least squares), la cual busca coeficientes tales que:
+
+$\hat{\beta{iM}} = arg min_{\beta} \sum_{i=1}^{n} \rho\left( \epsilon_i \left(\beta_i \right)\right)$ 
+
+para cierta función $\rho \left( . \right)$ que actúa en los residuos (y es responsable por la robustez del método al mitigar el efecto de residuos más extremos), mediante un método numérico que estima $\beta{i}$ en el paso $t$ como:
+
+$\hat{\beta_i}^{(t+1)} = \left( \boldsymbol{X}^T \left( \boldsymbol{W}^{-1} \right)^{(t)} \boldsymbol{X} \right)^{-1} \boldsymbol{X}^T \left( \boldsymbol{W}^{-1} \right)^{(t)} \boldsymbol{y}$
+
+Los pesos de la matriz diagonal $\boldsymbol{W}$ son calculados en base a una función $\psi \left( .\right) = \rho' \left( .\right) \psi \left( .\right)$, llamada la función de influencia. Esta función es uno de los parámetros configurables de la función *rlm*, por defecto esta usa la función de Huber.
+
+(Referencia: https://online.stat.psu.edu/stat501/lesson/13/13.3 )
+
+Los coeficientes obtenidos por este método fueron:
+
+```{r}
+tidy_robust_model <- tidy(robust_model, conf.int = TRUE)
+
+tidy_robust_model %>% kable()
+```
+Los cuales no están muy lejos de los coeficientes estimados con los datos originales, como era de esperarse.
+
+Por último, las métricas fueron:
+
+```{r}
+robust_model %>% augment(newdata = dtrain2) %>% metrics(truth = peso, estimate = .fitted) %>% kable()
+```
+
+que son peores en este dataset que si se usara el modelo original por el hecho de que los métodos robustos ignoran los valores atípicos extremos.
